@@ -1,32 +1,50 @@
 import requests
-from enum import Enum
+import asyncio
+import httpx
+from typing import TypedDict, Literal
 
 
-class PokemonFields(Enum):
-    NAME = "name"
-    URL = "url"
-
-
-Pokemon = dict[PokemonFields, str]
+# PokemonFields = Literal["name", "url"]
+# Pokemon = TypedDict[str, str]
 
 
 class Crawler:
     def __init__(self, url: str):
         self.url = url
-        self.next_url = None
         self.pokemon_data = {}
+        self.queue = asyncio.Queue()
+        self.client = httpx.AsyncClient()
+        self.worker_limit = 2
 
-    def start(self):
+    async def start(self):
         data = requests.get(self.url).json()
-        self.extract(data)
-        while self.next_url is not None:
-            data = requests.get(self.next_url).json()
-            self.extract(data)
+        self.populate_queue(int(data["count"]))
+        workers = [asyncio.create_task(self.worker()) for _ in range(self.worker_limit)]
+        await self.queue.join()
 
-    def extract(self, data: dict[str, str | dict]) -> dict:
-        self.next_url = data["next"]
-        results: list[Pokemon] = data["results"]
-        for pokemon in results:
-            self.pokemon_data[pokemon["name"]] = requests.get(
-                pokemon["url"]
-            ).json()
+        for worker in workers:
+            worker.cancel()
+
+    def populate_queue(self, count: int) -> None:
+        for i in range(1, count + 1):
+            self.queue.put_nowait(f"{self.url}/{i}")
+
+    async def worker(self):
+        while True:
+            try:
+                await self.extract()
+            except asyncio.CancelledError:
+                return           
+                
+    async def extract(self):
+        """
+        TO DO: 
+        - convert payload to json
+        - extract data 
+        - save data
+        
+        """
+        url = await self.queue.get()
+        payload = await self.client.get(url)
+        async for x in payload.aiter_text():
+            print(x)
